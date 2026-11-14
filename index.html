@@ -26,6 +26,7 @@ button{font:inherit;font-weight:600;border:0;border-radius:14px;padding:11px 16p
 button.ghost{background:var(--ac2);color:var(--ac)}
 button.ic{padding:0;width:44px;height:44px}
 button.lk{background:none;color:var(--ac);padding:6px 0;font-size:14px}
+.lb{display:inline-flex;align-items:center;padding:4px 7px;border:1px solid var(--bd);border-radius:999px;color:var(--ac);font-size:10px;font-weight:800;letter-spacing:.08em;white-space:nowrap}
 .dot{position:relative}.dot::after{content:'';position:absolute;top:6px;right:6px;width:9px;height:9px;border-radius:50%;background:#fff3f7;border:2px solid var(--bg)}
 .sh{margin-top:20px}
 .hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
@@ -274,7 +275,7 @@ const $=id=>document.getElementById(id);
 const ICON=n=>`<svg class="i"><use href="#i-${n}"/></svg>`;
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let selOn=false,sel=new Set(),moveIds=[];
-let F={q:'',c:new Set()},navL=[],SZ='m',S={chars:[],cats:[],items:[]},V='chars',charId=null,chEdit=null,catId=null,addTo=null,openId=null,G={},dirty=false,lastPush=0;
+let F={q:'',c:new Set()},navL=[],SZ='m',S={chars:[],cats:[],items:[]},V='chars',charId=null,chEdit=null,catId=null,addTo=null,openId=null,G={},dirty=false,lastPush=0,pulling=false,lastAutoPull=0;
 try{SZ=localStorage.getItem('wds')||'m'}catch(e){}
 if(!['s','m','l'].includes(SZ))SZ='m';document.body.dataset.sz=SZ;
 try{const s=localStorage.getItem('wd');if(s)S=JSON.parse(s);G=JSON.parse(localStorage.getItem('wdg')||'{}');dirty=localStorage.getItem('wdd')==='1';lastPush=+localStorage.getItem('wdp')||0}catch(e){}
@@ -411,11 +412,12 @@ function render(){
 }
 /* внешности */
 let lkEdit=null;const lkOpen=new Set();
-const lookCard=l=>`<div class="cd${lkOpen.has(l.id)?' open':''}"><div class="hd" style="margin-bottom:6px"><h2 style="font-size:24px">${esc(l.name)}</h2></div><div class="ct" onclick="toggleLk('${l.id}')">${esc(l.desc||'Без описания')}</div><div class="cr"><button class="lk" onclick="toggleLk('${l.id}')">${lkOpen.has(l.id)?'Свернуть':'Развернуть'}</button><button class="lk" onclick="copyLook('${l.id}')">${ICON('copy')} Копировать</button><button class="lk ed" onclick="openLook('${l.id}')">${ICON('edit')} Изменить</button></div></div>`;
+const isLibraryLook=l=>/^ness_/.test(String(l&&l.id||''));
+const lookCard=l=>{const lib=isLibraryLook(l);return `<div class="cd${lkOpen.has(l.id)?' open':''}"><div class="hd" style="margin-bottom:6px"><h2 style="font-size:24px">${esc(l.name)}</h2>${lib?'<span class="lb">NESS LIBRARY</span>':''}</div><div class="ct" onclick="toggleLk('${l.id}')">${esc(l.desc||'Без описания')}</div><div class="cr"><button class="lk" onclick="toggleLk('${l.id}')">${lkOpen.has(l.id)?'Свернуть':'Развернуть'}</button><button class="lk" onclick="copyLook('${l.id}')">${ICON('copy')} Копировать</button>${lib?'':`<button class="lk ed" onclick="openLook('${l.id}')">${ICON('edit')} Изменить</button>`}</div></div>`};
 function toggleLk(id){lkOpen.has(id)?lkOpen.delete(id):lkOpen.add(id);render()}
 function fitLk(){const t=$('lkDesc');t.style.height='auto';t.style.height=Math.min(Math.max(140,t.scrollHeight),innerHeight*.45)+'px'}
 function openLook(id){
-  lkEdit=id||null;const l=(S.looks||[]).find(x=>x.id===lkEdit);
+  lkEdit=id||null;const l=(S.looks||[]).find(x=>x.id===lkEdit);if(l&&isLibraryLook(l)){toast('Эта внешность обновляется из NESS Library');return}
   $('lkHead').textContent=l?'Изменить внешность':'Новая внешность';
   $('lkName').value=l?l.name:'';$('lkDesc').value=l?l.desc||'':'';$('lkDelRow').hidden=!l;
   dLk.showModal();fitLk();
@@ -429,6 +431,7 @@ function saveLook(){
 }
 function delLook(){
   const l=S.looks.find(x=>x.id===lkEdit);if(!l)return;
+  if(isLibraryLook(l))return toast('Эта внешность удаляется только из NESS Library');
   if(!confirm(`Удалить внешность «${l.name}»?`))return;
   S.looks=S.looks.filter(x=>x.id!==l.id);commit();dLk.close();render();
 }
@@ -596,6 +599,14 @@ async function put(path,content64,msg){
   const w=await fetch(api(path),{method:'PUT',headers:hd(),body:JSON.stringify({message:msg,content:content64,sha})});
   if(!w.ok)throw new Error((await w.json()).message);
 }
+async function readRemoteWardrobe(){
+  if(G.u&&G.r&&G.t){const r=await fetch(api('wardrobe.json'),{headers:hd()});if(!r.ok)throw new Error('wardrobe.json не найден');return JSON.parse(decodeURIComponent(escape(atob((await r.json()).content.replace(/\n/g,'')))))}
+  const r=await fetch('wardrobe.json?t='+Date.now(),{cache:'no-store'});if(!r.ok)throw new Error('wardrobe.json не найден');return await r.json();
+}
+function mergeLibraryLooks(remoteLooks,localLooks){
+  const published=(Array.isArray(remoteLooks)?remoteLooks:[]).filter(isLibraryLook),own=(Array.isArray(localLooks)?localLooks:[]).filter(l=>!isLibraryLook(l));
+  return [...published,...own];
+}
 async function sweep(refs){
   if(!refs.size)return 0;
   const r=await fetch(api('images'),{headers:hd()});if(!r.ok)return 0;
@@ -624,26 +635,30 @@ async function push(){
       else if(img.startsWith('data:'))img='';
       out.items.push({id:i.id,cat:i.cat,desc:i.desc,img,fav:!!i.fav});
     }
+    const latest=await readRemoteWardrobe();out.looks=mergeLibraryLooks(latest.looks,out.looks);
     await put('wardrobe.json',b64(JSON.stringify(out,null,1)),'Update wardrobe');
     S.items.forEach(i=>{if(paths[i.id]){i.img=paths[i.id];delete i.v}});
     S.chars.forEach(c=>{if(cpaths[c.id]){c.img=cpaths[c.id];delete c.v}});
+    S.looks=out.looks;
     let gone=0;try{gone=await sweep(new Set([...out.items.map(i=>i.img),...out.chars.map(c=>c.img)].filter(Boolean).map(p=>p.split('?')[0])))}catch(e){}
     lastPush=Date.now();try{localStorage.setItem('wdp',lastPush)}catch(e){}
     save();mark(false);render();toast('Всё сохранено на GitHub'+(gone?' · убрано лишних файлов: '+gone:''))
   }catch(e){toast('Ошибка GitHub: '+e.message)}
 }
 async function pull(silent){
-  if(silent!==true&&dirty&&!confirm('Есть несохранённые изменения, они пропадут. Продолжить?'))return;
+  if(pulling)return;pulling=true;
+  if(silent!==true&&dirty&&!confirm('Есть несохранённые изменения, они пропадут. Продолжить?')){pulling=false;return}
   try{
-    let d;
-    if(G.u&&G.r&&G.t){const r=await fetch(api('wardrobe.json'),{headers:hd()});if(!r.ok)throw new Error('файл не найден');d=JSON.parse(decodeURIComponent(escape(atob((await r.json()).content.replace(/\n/g,'')))))}
-    else{const r=await fetch('wardrobe.json?t='+Date.now());if(!r.ok)throw new Error('файл не найден');d=await r.json()}
-    S=d;const a=migrate(),b=clean();save();mark(a||b);render();if(silent!==true)toast('Обновлено')
+    const d=await readRemoteWardrobe();
+    if(silent===true&&dirty){const merged=mergeLibraryLooks(d.looks,S.looks);if(JSON.stringify(merged)!==JSON.stringify(S.looks||[])){S.looks=merged;save();render();toast('Внешности из NESS Library обновлены')}}
+    else{S=d;const a=migrate(),b=clean();save();mark(a||b);render();if(silent!==true)toast('Обновлено')}
   }catch(e){if(silent!==true)toast('Ошибка: '+e.message)}
+  finally{pulling=false}
 }
 {const a=migrate(),b=clean();if(a||b){save();mark(true)}}
 mark(dirty);render();
-if(!dirty&&Date.now()-lastPush>600000)pull(true);
+function autoPull(){if(Date.now()-lastAutoPull<15000)return;lastAutoPull=Date.now();pull(true)}
+autoPull();addEventListener('focus',autoPull);document.addEventListener('visibilitychange',()=>{if(!document.hidden)autoPull()});setInterval(()=>{if(!document.hidden)autoPull()},120000);
 </script>
 </body>
 </html>
