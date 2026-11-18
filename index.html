@@ -275,14 +275,14 @@ const $=id=>document.getElementById(id);
 const ICON=n=>`<svg class="i"><use href="#i-${n}"/></svg>`;
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let selOn=false,sel=new Set(),moveIds=[];
-let F={q:'',c:new Set()},navL=[],SZ='m',S={chars:[],cats:[],items:[]},V='chars',charId=null,chEdit=null,catId=null,addTo=null,openId=null,G={},dirty=false,lastPush=0,pulling=false,lastAutoPull=0;
+let F={q:'',c:new Set()},navL=[],SZ='m',S={chars:[],cats:[],items:[]},V='chars',charId=null,chEdit=null,catId=null,addTo=null,openId=null,G={},dirty=false,lastPush=0,pulling=false,lastAutoPull=0,pushing=false,pushAgain=false,autoPushTimer=null,localRevision=0,lastDirtyNotice=0;
 try{SZ=localStorage.getItem('wds')||'m'}catch(e){}
 if(!['s','m','l'].includes(SZ))SZ='m';document.body.dataset.sz=SZ;
 try{const s=localStorage.getItem('wd');if(s)S=JSON.parse(s);G=JSON.parse(localStorage.getItem('wdg')||'{}');dirty=localStorage.getItem('wdd')==='1';lastPush=+localStorage.getItem('wdp')||0}catch(e){}
 function toast(t){const e=$('st');e.textContent=t;e.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('on'),2800)}
 function save(){try{localStorage.setItem('wd',JSON.stringify(S))}catch(e){toast('Память браузера заполнена, сохрани на GitHub')}}
-function mark(v){dirty=v;try{localStorage.setItem('wdd',v?'1':'0')}catch(e){}$('bPush').classList.toggle('dot',v)}
-function commit(){save();mark(true)}
+function mark(v){dirty=v;try{localStorage.setItem('wdd',v?'1':'0')}catch(e){}const b=$('bPush');b.classList.toggle('dot',v);b.setAttribute('aria-label',v?'Есть несохранённые изменения. Сохранить на GitHub':'Всё синхронизировано с GitHub')}
+function commit(){localRevision++;save();mark(true);schedulePush()}
 function clean(){const n=S.items.length+S.cats.length;S.items=S.items.filter(i=>i.id!=='i1'&&i.id!=='i2');S.cats=S.cats.filter(c=>!['c1','c2','c3'].includes(c.id)||S.items.some(i=>i.cat===c.id));return n!==S.items.length+S.cats.length}
 // старые данные без персонажей: всё уходит к первому персонажу
 function migrate(){
@@ -590,9 +590,14 @@ async function copyImg(){try{const b=await toPng($('vImg').src);await navigator.
 async function saveImg(){try{const b=await toPng($('vImg').src);const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='outfit-'+openId+'.png';a.click()}catch(e){toast('Не вышло, зажми картинку и выбери «Сохранить»')}}
 
 function openGh(){$('gUser').value=G.u||'';$('gRepo').value=G.r||'';$('gTok').value=G.t||'';dGh.showModal()}
-function saveGh(){G={u:$('gUser').value.trim(),r:$('gRepo').value.trim(),t:$('gTok').value.trim()};try{localStorage.setItem('wdg',JSON.stringify(G))}catch(e){}dGh.close();render();toast(can()?'Режим редактирования включён':'Режим просмотра')}
-const api=p=>`https://api.github.com/repos/${G.u}/${G.r}/contents/${p}`;
-const hd=()=>({Authorization:'Bearer '+G.t,Accept:'application/vnd.github+json'});
+function saveGh(){G={u:$('gUser').value.trim(),r:$('gRepo').value.trim(),t:$('gTok').value.trim()};try{localStorage.setItem('wdg',JSON.stringify(G))}catch(e){}dGh.close();render();if(can()&&dirty)schedulePush();toast(can()?'Режим редактирования включён':'Режим просмотра')}
+function repoInfo(){
+  let u=G.u||'',r=G.r||'';
+  if(!u||!r){const m=location.hostname.match(/^([^.]+)\.github\.io$/i),p=location.pathname.split('/').filter(Boolean);if(m){u=u||m[1];r=r||p[0]||`${u}.github.io`}}
+  return u&&r?{u,r}:null;
+}
+const api=p=>{const x=repoInfo();return x?`https://api.github.com/repos/${encodeURIComponent(x.u)}/${encodeURIComponent(x.r)}/contents/${p}`:''};
+const hd=()=>{const h={Accept:'application/vnd.github+json'};if(G.t)h.Authorization='Bearer '+G.t;return h};
 const b64=s=>btoa(unescape(encodeURIComponent(s)));
 async function put(path,content64,msg){
   let sha;const r=await fetch(api(path),{headers:hd()});if(r.ok)sha=(await r.json()).sha;
@@ -600,7 +605,7 @@ async function put(path,content64,msg){
   if(!w.ok)throw new Error((await w.json()).message);
 }
 async function readRemoteWardrobe(){
-  if(G.u&&G.r&&G.t){const r=await fetch(api('wardrobe.json'),{headers:hd()});if(!r.ok)throw new Error('wardrobe.json не найден');return JSON.parse(decodeURIComponent(escape(atob((await r.json()).content.replace(/\n/g,'')))))}
+  if(repoInfo()){const r=await fetch(api('wardrobe.json'),{headers:hd(),cache:'no-store'});if(r.ok){const j=await r.json();return JSON.parse(decodeURIComponent(escape(atob(j.content.replace(/\n/g,'')))))}if(G.t)throw new Error('wardrobe.json не найден')}
   const r=await fetch('wardrobe.json?t='+Date.now(),{cache:'no-store'});if(!r.ok)throw new Error('wardrobe.json не найден');return await r.json();
 }
 function mergeLibraryLooks(remoteLooks,localLooks){
@@ -619,8 +624,11 @@ async function sweep(refs){
   }
   return n;
 }
-async function push(){
+function schedulePush(){if(!can()||!dirty)return;clearTimeout(autoPushTimer);autoPushTimer=setTimeout(()=>{autoPushTimer=null;push(true)},2500)}
+async function push(silent){
+  if(pushing){pushAgain=true;return}
   if(!G.u||!G.r||!G.t){openGh();return toast('Сначала заполни настройки GitHub')}
+  pushing=true;clearTimeout(autoPushTimer);autoPushTimer=null;const revision=localRevision;
   try{
     const out={chars:[],cats:S.cats,items:[],looks:S.looks||[]},paths={},cpaths={};let n=0;
     for(const c of S.chars){
@@ -642,15 +650,16 @@ async function push(){
     S.looks=out.looks;
     let gone=0;try{gone=await sweep(new Set([...out.items.map(i=>i.img),...out.chars.map(c=>c.img)].filter(Boolean).map(p=>p.split('?')[0])))}catch(e){}
     lastPush=Date.now();try{localStorage.setItem('wdp',lastPush)}catch(e){}
-    save();mark(false);render();toast('Всё сохранено на GitHub'+(gone?' · убрано лишних файлов: '+gone:''))
-  }catch(e){toast('Ошибка GitHub: '+e.message)}
+    save();if(localRevision===revision)mark(false);else mark(true);render();toast((silent===true?'Синхронизировано':'Всё сохранено на GitHub')+(gone?' · убрано лишних файлов: '+gone:''))
+  }catch(e){mark(true);toast((silent===true?'Автосохранение не удалось: ':'Ошибка GitHub: ')+e.message)}
+  finally{pushing=false;if(pushAgain||dirty&&localRevision!==revision){pushAgain=false;schedulePush()}}
 }
 async function pull(silent){
   if(pulling)return;pulling=true;
   if(silent!==true&&dirty&&!confirm('Есть несохранённые изменения, они пропадут. Продолжить?')){pulling=false;return}
   try{
     const d=await readRemoteWardrobe();
-    if(silent===true&&dirty){const merged=mergeLibraryLooks(d.looks,S.looks);if(JSON.stringify(merged)!==JSON.stringify(S.looks||[])){S.looks=merged;save();render();toast('Внешности из NESS Library обновлены')}}
+    if(silent===true&&dirty){const merged=mergeLibraryLooks(d.looks,S.looks);if(JSON.stringify(merged)!==JSON.stringify(S.looks||[])){S.looks=merged;save();render();toast('Внешности из NESS Library обновлены')}if(Date.now()-lastDirtyNotice>60000){lastDirtyNotice=Date.now();toast('На этом устройстве есть несохранённое — нажми стрелку вверх')}}
     else{S=d;const a=migrate(),b=clean();save();mark(a||b);render();if(silent!==true)toast('Обновлено')}
   }catch(e){if(silent!==true)toast('Ошибка: '+e.message)}
   finally{pulling=false}
@@ -658,7 +667,7 @@ async function pull(silent){
 {const a=migrate(),b=clean();if(a||b){save();mark(true)}}
 mark(dirty);render();
 function autoPull(){if(Date.now()-lastAutoPull<15000)return;lastAutoPull=Date.now();pull(true)}
-autoPull();addEventListener('focus',autoPull);document.addEventListener('visibilitychange',()=>{if(!document.hidden)autoPull()});setInterval(()=>{if(!document.hidden)autoPull()},120000);
+autoPull();addEventListener('focus',autoPull);addEventListener('online',()=>{if(dirty)schedulePush();autoPull()});document.addEventListener('visibilitychange',()=>{if(!document.hidden)autoPull()});setInterval(()=>{if(!document.hidden)autoPull()},120000);
 </script>
 </body>
 </html>
