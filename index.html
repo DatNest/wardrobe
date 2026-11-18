@@ -264,6 +264,7 @@ body[data-sty="mag"] .ch span{text-transform:uppercase;letter-spacing:1px;font-s
   <input id="gRepo" placeholder="Название репозитория" autocomplete="off" data-lpignore="true" data-form-type="other">
   <input id="gTok" class="mask" type="text" name="wd-gh-key" placeholder="Токен (нужен только для сохранения)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-bwignore data-form-type="other">
   <p class="note">Токен хранится только в этом браузере. Без токена сайт работает в режиме просмотра: кнопки добавления и редактирования скрыты.</p>
+  <button class="ghost" onclick="downloadBackup()">Скачать локальную резервную копию</button>
   <div class="row"><button onclick="saveGh()">Сохранить</button><button class="ghost" onclick="dGh.close()">Закрыть</button></div>
 </dialog>
 <div id="sb" hidden><span>Выбрано: <b id="sbn">0</b></span><button onclick="openMoveSel()"><svg class="i"><use href="#i-move"/></svg> Перенести</button><button class="ghost" onclick="toggleSel()">Отмена</button></div>
@@ -275,6 +276,7 @@ const $=id=>document.getElementById(id);
 const ICON=n=>`<svg class="i"><use href="#i-${n}"/></svg>`;
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let selOn=false,sel=new Set(),moveIds=[];
+let lastStable=null;
 let F={q:'',c:new Set()},navL=[],SZ='m',S={chars:[],cats:[],items:[]},V='chars',charId=null,chEdit=null,catId=null,addTo=null,openId=null,G={},dirty=false,lastPush=0,pulling=false,lastAutoPull=0,pushing=false,pushAgain=false,autoPushTimer=null,localRevision=0,lastDirtyNotice=0;
 try{SZ=localStorage.getItem('wds')||'m'}catch(e){}
 if(!['s','m','l'].includes(SZ))SZ='m';document.body.dataset.sz=SZ;
@@ -282,7 +284,7 @@ try{const s=localStorage.getItem('wd');if(s)S=JSON.parse(s);G=JSON.parse(localSt
 function toast(t){const e=$('st');e.textContent=t;e.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('on'),2800)}
 function save(){try{localStorage.setItem('wd',JSON.stringify(S))}catch(e){toast('Память браузера заполнена, сохрани на GitHub')}}
 function mark(v){dirty=v;try{localStorage.setItem('wdd',v?'1':'0')}catch(e){}const b=$('bPush');b.classList.toggle('dot',v);b.setAttribute('aria-label',v?'Есть несохранённые изменения. Сохранить на GitHub':'Всё синхронизировано с GitHub')}
-function commit(){localRevision++;save();mark(true);schedulePush()}
+function commit(){if(lastStable)rememberDeletes(lastStable,S);localRevision++;save();lastStable=snapshot(S);mark(true);schedulePush()}
 function clean(){const n=S.items.length+S.cats.length;S.items=S.items.filter(i=>i.id!=='i1'&&i.id!=='i2');S.cats=S.cats.filter(c=>!['c1','c2','c3'].includes(c.id)||S.items.some(i=>i.cat===c.id));return n!==S.items.length+S.cats.length}
 // старые данные без персонажей: всё уходит к первому персонажу
 function migrate(){
@@ -590,7 +592,7 @@ async function copyImg(){try{const b=await toPng($('vImg').src);await navigator.
 async function saveImg(){try{const b=await toPng($('vImg').src);const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='outfit-'+openId+'.png';a.click()}catch(e){toast('Не вышло, зажми картинку и выбери «Сохранить»')}}
 
 function openGh(){$('gUser').value=G.u||'';$('gRepo').value=G.r||'';$('gTok').value=G.t||'';dGh.showModal()}
-function saveGh(){G={u:$('gUser').value.trim(),r:$('gRepo').value.trim(),t:$('gTok').value.trim()};try{localStorage.setItem('wdg',JSON.stringify(G))}catch(e){}dGh.close();render();if(can()&&dirty)schedulePush();toast(can()?'Режим редактирования включён':'Режим просмотра')}
+function saveGh(){G={u:$('gUser').value.trim(),r:$('gRepo').value.trim(),t:$('gTok').value.trim()};try{localStorage.setItem('wdg',JSON.stringify(G))}catch(e){}dGh.close();render();syncOnce('auto');toast(can()?'Режим редактирования включён':'Режим просмотра')}
 function repoInfo(){
   let u=G.u||'',r=G.r||'';
   if(!u||!r){const m=location.hostname.match(/^([^.]+)\.github\.io$/i),p=location.pathname.split('/').filter(Boolean);if(m){u=u||m[1];r=r||p[0]||`${u}.github.io`}}
@@ -599,75 +601,290 @@ function repoInfo(){
 const api=p=>{const x=repoInfo();return x?`https://api.github.com/repos/${encodeURIComponent(x.u)}/${encodeURIComponent(x.r)}/contents/${p}`:''};
 const hd=()=>{const h={Accept:'application/vnd.github+json'};if(G.t)h.Authorization='Bearer '+G.t;return h};
 const b64=s=>btoa(unescape(encodeURIComponent(s)));
-async function put(path,content64,msg){
-  let sha;const r=await fetch(api(path),{headers:hd()});if(r.ok)sha=(await r.json()).sha;
-  const w=await fetch(api(path),{method:'PUT',headers:hd(),body:JSON.stringify({message:msg,content:content64,sha})});
-  if(!w.ok)throw new Error((await w.json()).message);
-}
-async function readRemoteWardrobe(){
-  if(repoInfo()){const r=await fetch(api('wardrobe.json'),{headers:hd(),cache:'no-store'});if(r.ok){const j=await r.json();return JSON.parse(decodeURIComponent(escape(atob(j.content.replace(/\n/g,'')))))}if(G.t)throw new Error('wardrobe.json не найден')}
-  const r=await fetch('wardrobe.json?t='+Date.now(),{cache:'no-store'});if(!r.ok)throw new Error('wardrobe.json не найден');return await r.json();
-}
-function mergeLibraryLooks(remoteLooks,localLooks){
-  const published=(Array.isArray(remoteLooks)?remoteLooks:[]).filter(isLibraryLook),own=(Array.isArray(localLooks)?localLooks:[]).filter(l=>!isLibraryLook(l));
-  return [...published,...own];
-}
-async function sweep(refs){
-  if(!refs.size)return 0;
-  const r=await fetch(api('images'),{headers:hd()});if(!r.ok)return 0;
-  const list=await r.json();if(!Array.isArray(list))return 0;let n=0;
-  for(const f of list){
-    if(f.type!=='file'||!/\.(jpe?g|png|webp|gif)$/i.test(f.name)||refs.has('images/'+f.name))continue;
-    toast('Убираю лишнее: '+f.name);
-    const d=await fetch(api('images/'+f.name),{method:'DELETE',headers:hd(),body:JSON.stringify({message:'Remove unused '+f.name,sha:f.sha})});
-    if(d.ok)n++;
+/* Безопасная синхронизация: объединение без потери записей, блокировка параллельных запросов. */
+const SYNC_DELAY=12*60*1000;
+const SYNC_KEY='wd_sync_base_v3';
+const DATA_GROUPS=['chars','cats','items','looks'];
+let syncBase=null,syncBusy=false,syncAgain=false,syncDebounce=null,lastSyncStart=0,lastSyncError=0;
+try{const raw=localStorage.getItem(SYNC_KEY);if(raw)syncBase=snapshot(JSON.parse(raw))}catch(e){}
+function snapshot(raw){
+  const d=raw&&typeof raw==='object'?raw:{};
+  const o={chars:[],cats:[],items:[],looks:[],_sync:{version:3,deleted:{}}};
+  for(const k of DATA_GROUPS)o[k]=Array.isArray(d[k])?d[k].filter(x=>x&&typeof x==='object'&&x.id!=null).map(x=>({...x})):[];
+  if(d._sync&&d._sync.deleted&&typeof d._sync.deleted==='object'){
+    for(const [k,v] of Object.entries(d._sync.deleted))if(Number.isFinite(Number(v)))o._sync.deleted[k]=Number(v);
   }
-  return n;
+  return o;
 }
-function schedulePush(){if(!can()||!dirty)return;clearTimeout(autoPushTimer);autoPushTimer=setTimeout(()=>{autoPushTimer=null;push(true)},2500)}
-async function push(silent){
-  if(pushing){pushAgain=true;return}
-  if(!G.u||!G.r||!G.t){openGh();return toast('Сначала заполни настройки GitHub')}
-  pushing=true;clearTimeout(autoPushTimer);autoPushTimer=null;const revision=localRevision;
+const same=(a,b)=>a===b||(a==null&&b==null);
+const fieldValue=(rec,key)=>key==='fav'?!!rec?.[key]:['img','desc'].includes(key)?(rec?.[key]||''):rec?.[key];
+function recordSame(a,b){
+  if(a===b)return true;
+  if(!a||!b)return false;
+  const keys=new Set([...Object.keys(a),...Object.keys(b)].filter(k=>k!=='v'));
+  for(const k of keys){
+    const av=fieldValue(a,k),bv=fieldValue(b,k);
+    if(!same(av,bv))return false;
+  }
+  return true;
+}
+function dataSame(a,b){
+  if(!a||!b)return false;
+  for(const k of DATA_GROUPS){
+    const x=a[k]||[],y=b[k]||[];
+    if(x.length!==y.length)return false;
+    const m=new Map(y.map(z=>[String(z.id),z]));
+    for(const rec of x)if(!recordSame(rec,m.get(String(rec.id))))return false;
+  }
+  const x=a._sync?.deleted||{},y=b._sync?.deleted||{};
+  const keys=new Set([...Object.keys(x),...Object.keys(y)]);
+  return [...keys].every(k=>(x[k]||0)===(y[k]||0));
+}
+function mergeFields(base,local,remote){
+  // Изменения разных полей объединяются. Если одно поле менялось с обеих сторон —
+  // оставляем опубликованную версию и сохраняем локальную запись отдельной копией.
+  const fields=new Set([...Object.keys(base||{}),...Object.keys(local),...Object.keys(remote)]);
+  const out={...remote};let conflict=false;
+  for(const field of fields){
+    if(field==='v')continue;
+    const a=fieldValue(local,field),b=fieldValue(remote,field),c=fieldValue(base,field);
+    if(same(a,b))out[field]=a;
+    else if(base&&same(a,c))out[field]=b;
+    else if(base&&same(b,c))out[field]=a;
+    else conflict=true;
+  }
+  return {out,conflict};
+}
+function hashRecord(o){
+  // Стабильный короткий ID для копии, чтобы повторный цикл не плодил новые дубли.
+  const s=JSON.stringify(o);let h=2166136261;
+  for(let i=0;i<s.length;i++)h=Math.imul(h^s.charCodeAt(i),16777619);
+  return (h>>>0).toString(36);
+}
+function conflictCopy(group,local){
+  const c={...local};
+  const prefix={chars:'ch',cats:'c',items:'i',looks:'look_'}[group];
+  c.id=prefix+'saved_'+hashRecord(local)+'_'+String(local.id).replace(/[^\w-]/g,'').slice(-20);
+  if(group==='chars'||group==='cats'||group==='looks')c.name=(c.name||'Без названия')+' · копия с устройства';
+  else c.desc=(c.desc||'')+'\n(Сохранённая версия с другого устройства)';
+  return c;
+}
+function mergeData(base,local,remote){
+  const b=base?snapshot(base):null,a=snapshot(local),r=snapshot(remote),out=snapshot({});
+  const tombstones={...r._sync.deleted};
+  for(const [id,ts] of Object.entries(a._sync.deleted))tombstones[id]=Math.max(+tombstones[id]||0,+ts||0);
+  out._sync.deleted=tombstones;
+  for(const group of DATA_GROUPS){
+    const bm=new Map((b?.[group]||[]).map(x=>[String(x.id),x]));
+    const am=new Map(a[group].map(x=>[String(x.id),x]));
+    const rm=new Map(r[group].map(x=>[String(x.id),x]));
+    const ids=[...new Set([...rm.keys(),...am.keys()])];
+    const present=new Set();
+    for(const id of ids){
+      if(tombstones[group+':'+id])continue;
+      const l=am.get(id),v=rm.get(id),prev=bm.get(id);
+      let chosen=null,copy=null;
+      if(!l)chosen=v;
+      else if(!v)chosen=l;
+      else if(recordSame(l,v))chosen=v;
+      else if(prev&&recordSame(l,prev))chosen=v;
+      else if(prev&&recordSame(v,prev))chosen=l;
+      else{
+        const m=mergeFields(prev,l,v);chosen=m.out;
+        if(m.conflict)copy=conflictCopy(group,l);
+      }
+      if(chosen&&!present.has(String(chosen.id))){out[group].push({...chosen});present.add(String(chosen.id))}
+      if(copy&&!present.has(String(copy.id))&&!tombstones[group+':'+copy.id]){
+        out[group].push(copy);present.add(String(copy.id));
+      }
+    }
+  }
+  return out;
+}
+function rememberDeletes(previous,current){
+  const old=snapshot(previous),next=snapshot(current);
+  current._sync=current._sync||{version:3,deleted:{}};
+  current._sync.deleted=current._sync.deleted||{};
+  for(const group of DATA_GROUPS){
+    const ids=new Set(next[group].map(x=>String(x.id)));
+    for(const rec of old[group]){
+      const id=String(rec.id);
+      if(!ids.has(id))current._sync.deleted[group+':'+id]=Date.now();
+    }
+  }
+}
+function storeBase(next){
+  syncBase=snapshot(next);
+  try{localStorage.setItem(SYNC_KEY,JSON.stringify(syncBase))}catch(e){/* локальные данные остаются нетронутыми */}
+}
+async function readRemote(){
+  const url=api('wardrobe.json');
+  if(!url){
+    const r=await fetch('wardrobe.json?fresh='+Date.now(),{cache:'no-store'});
+    if(!r.ok)throw new Error('Не удалось прочитать каталог ('+r.status+')');
+    return {data:snapshot(await r.json()),sha:null,exists:true};
+  }
+  const r=await fetch(url,{headers:hd(),cache:'no-store'});
+  if(r.status===404&&can())return {data:snapshot({}),sha:null,exists:false};
+  if(!r.ok)throw new Error('GitHub: '+r.status+' · не удалось прочитать каталог');
+  const j=await r.json();
+  if(!j.content)throw new Error('GitHub не вернул содержимое каталога');
+  return {data:snapshot(JSON.parse(decodeURIComponent(escape(atob(j.content.replace(/\s/g,'')))))),sha:j.sha,exists:true};
+}
+async function putAt(path,content64,msg,sha){
+  const body={message:msg,content:content64};if(sha)body.sha=sha;
+  const r=await fetch(api(path),{method:'PUT',headers:hd(),body:JSON.stringify(body)});
+  if(r.status===409||r.status===422){
+    const e=new Error('Конфликт версий GitHub');e.conflict=true;throw e;
+  }
+  if(!r.ok){let detail='';try{detail=(await r.json()).message||''}catch(e){}throw new Error('GitHub '+r.status+(detail?' · '+detail:''))}
+  return await r.json();
+}
+async function uploadImages(data){
+  const out=snapshot(data);let count=0;
+  for(const [group,cap] of [['chars','Обложка'],['items','Фото']]){
+    for(const rec of out[group]){
+      const raw=rec.img||'';
+      if(raw.startsWith('data:image/jpeg;base64,')){
+        const path='images/'+rec.id+(rec.v?'_'+rec.v:'')+'.jpg';
+        const head=await fetch(api(path),{headers:hd(),cache:'no-store'});
+        if(head.status!==404&&!head.ok)throw new Error('Не удалось проверить фотографию ('+head.status+')');
+        const previous=head.ok?(await head.json()).sha:null;
+        await putAt(path,raw.split(',')[1],cap+' '+rec.id,previous);
+        rec.img=path;delete rec.v;count++;
+      }else if(raw.startsWith('data:')){
+        // Неподдерживаемое изображение не теряем: не отправляем пустой img.
+        throw new Error('Не удалось загрузить изображение '+rec.id+' · нужен JPEG');
+      }
+    }
+  }
+  return out;
+}
+function applyUploadedImagePaths(beforeUpload,published){
+  // Заменяем data: на ссылку лишь у тех фотографий, которые реально отправили.
+  // Если пользователь успел выбрать другую фотографию, её не затрагиваем.
+  for(const group of ['chars','items']){
+    const before=new Map(beforeUpload[group].map(x=>[String(x.id),x]));
+    const done=new Map(published[group].map(x=>[String(x.id),x]));
+    for(const rec of S[group]||[]){
+      const b=before.get(String(rec.id)),p=done.get(String(rec.id));
+      if(b&&p&&rec.img===b.img&&String(rec.v||'')===String(b.v||'')&&
+          typeof rec.img==='string'&&rec.img.startsWith('data:image/')&&
+          typeof p.img==='string'&&p.img.startsWith('images/')){
+        rec.img=p.img;delete rec.v;
+      }
+    }
+  }
+}
+async function syncOnce(trigger='auto'){
+  if(syncBusy){syncAgain=true;return}
+  if(!repoInfo())return;
+  syncBusy=true;syncAgain=false;lastSyncStart=Date.now();
+  clearTimeout(syncDebounce);syncDebounce=null;
+  const manual=trigger==='pull'||trigger==='push';
+  const working=snapshot(S);
+  const rev=localRevision;
   try{
-    const out={chars:[],cats:S.cats,items:[],looks:S.looks||[]},paths={},cpaths={};let n=0;
-    for(const c of S.chars){
-      let img=c.img||'';
-      if(img.startsWith('data:image/jpeg')){img='images/'+c.id+(c.v?'_'+c.v:'')+'.jpg';toast('Загружаю обложку '+c.name+'…');await put(img,c.img.split(',')[1],'Cover '+c.id);cpaths[c.id]=img}
-      else if(img.startsWith('data:'))img='';
-      out.chars.push({id:c.id,name:c.name,desc:c.desc||'',img});
+    let remote=await readRemote();
+    let merged=mergeData(syncBase,working,remote.data);
+    if(!dataSame(S,merged)){
+      // Могли в это время редактировать запись: повторно объединяем с живым S.
+      merged=mergeData(working,S,merged);
+      S=merged;save();lastStable=snapshot(S);render();
     }
-    for(const i of S.items){
-      let img=i.img;
-      if(img.startsWith('data:image/jpeg')){img='images/'+i.id+(i.v?'_'+i.v:'')+'.jpg';toast(`Загружаю фото ${++n}…`);await put(img,i.img.split(',')[1],'Add '+i.id);paths[i.id]=img}
-      else if(img.startsWith('data:'))img='';
-      out.items.push({id:i.id,cat:i.cat,desc:i.desc,img,fav:!!i.fav});
+    storeBase(remote.data);
+    if(!can()){
+      mark(!dataSame(S,remote.data));
+      if(manual)toast('Загружено · изменения на устройстве сохранены');
+      return;
     }
-    const latest=await readRemoteWardrobe();out.looks=mergeLibraryLooks(latest.looks,out.looks);
-    await put('wardrobe.json',b64(JSON.stringify(out,null,1)),'Update wardrobe');
-    S.items.forEach(i=>{if(paths[i.id]){i.img=paths[i.id];delete i.v}});
-    S.chars.forEach(c=>{if(cpaths[c.id]){c.img=cpaths[c.id];delete c.v}});
-    S.looks=out.looks;
-    let gone=0;try{gone=await sweep(new Set([...out.items.map(i=>i.img),...out.chars.map(c=>c.img)].filter(Boolean).map(p=>p.split('?')[0])))}catch(e){}
+    if(dataSame(merged,remote.data)){
+      if(localRevision===rev)mark(false);
+      if(manual)toast('Всё синхронизировано');
+      return;
+    }
+    // На каждой попытке читаем последнюю версию и объединяем её со своей,
+    // чтобы не перезаписать данные другого устройства или NESS Library.
+    let published=null;
+    for(let attempt=0;attempt<3;attempt++){
+      if(attempt){remote=await readRemote();merged=mergeData(syncBase,S,remote.data);storeBase(remote.data)}
+      const output=await uploadImages(merged);
+      try{
+        await putAt('wardrobe.json',b64(JSON.stringify(output,null,1)),'Sync wardrobe safely',remote.sha);
+        published=output;break;
+      }catch(e){if(!e.conflict||attempt===2)throw e}
+    }
+    if(!published)throw new Error('Не удалось согласовать версии каталога');
+    // Сохраняем редактирование, сделанное пользователем во время сетевых запросов.
+    applyUploadedImagePaths(merged,published);
+    S=mergeData(working,S,published);
+    storeBase(published);save();lastStable=snapshot(S);
     lastPush=Date.now();try{localStorage.setItem('wdp',lastPush)}catch(e){}
-    save();if(localRevision===revision)mark(false);else mark(true);render();toast((silent===true?'Синхронизировано':'Всё сохранено на GitHub')+(gone?' · убрано лишних файлов: '+gone:''))
-  }catch(e){mark(true);toast((silent===true?'Автосохранение не удалось: ':'Ошибка GitHub: ')+e.message)}
-  finally{pushing=false;if(pushAgain||dirty&&localRevision!==revision){pushAgain=false;schedulePush()}}
+    mark(!dataSame(S,published));render();
+    if(manual)toast('Сохранено · данные устройств объединены');
+    if(dirty)schedulePush();
+  }catch(e){
+    mark(true); // не стираем локальные изменения при ошибке сети
+    if(manual||Date.now()-lastSyncError>120000){toast('Синхронизация: '+e.message);lastSyncError=Date.now()}
+    if(can())scheduleRetry();
+  }finally{
+    syncBusy=false;
+    if(syncAgain){syncAgain=false;schedulePush(1500)}
+  }
 }
-async function pull(silent){
-  if(pulling)return;pulling=true;
-  if(silent!==true&&dirty&&!confirm('Есть несохранённые изменения, они пропадут. Продолжить?')){pulling=false;return}
-  try{
-    const d=await readRemoteWardrobe();
-    if(silent===true&&dirty){const merged=mergeLibraryLooks(d.looks,S.looks);if(JSON.stringify(merged)!==JSON.stringify(S.looks||[])){S.looks=merged;save();render();toast('Внешности из NESS Library обновлены')}if(Date.now()-lastDirtyNotice>60000){lastDirtyNotice=Date.now();toast('На этом устройстве есть несохранённое — нажми стрелку вверх')}}
-    else{S=d;const a=migrate(),b=clean();save();mark(a||b);render();if(silent!==true)toast('Обновлено')}
-  }catch(e){if(silent!==true)toast('Ошибка: '+e.message)}
-  finally{pulling=false}
+function scheduleRetry(){
+  if(syncDebounce)return;
+  syncDebounce=setTimeout(()=>{syncDebounce=null;if(!document.hidden)syncOnce('auto')},2*60*1000);
 }
-{const a=migrate(),b=clean();if(a||b){save();mark(true)}}
+function schedulePush(delay){
+  if(!can()||!dirty)return;
+  clearTimeout(syncDebounce);
+  const wait=Math.max(delay??12000,45000-(Date.now()-lastPush));
+  syncDebounce=setTimeout(()=>{syncDebounce=null;syncOnce('auto')},wait);
+}
+function push(){syncOnce('push')}
+function pull(){syncOnce('pull')}
+function autoPull(){
+  if(document.hidden||Date.now()-lastSyncStart<30000)return;
+  syncOnce('auto');
+}
+function downloadBackup(){
+  const blob=new Blob([JSON.stringify(S,null,2)],{type:'application/json;charset=utf-8'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download='wardrobe-local-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+// Перед первой автоматической синхронизацией сохраняем исходные данные телефона/ПК
+// в отдельном хранилище браузера. Это не связано с GitHub и не перезаписывается.
+function backupLegacyLocal(){
+  return new Promise(done=>{
+    try{
+      const raw=localStorage.getItem('wd');
+      if(!raw||!window.indexedDB){done();return}
+      const request=indexedDB.open('wardrobe-safety-v3',1);
+      request.onupgradeneeded=()=>request.result.createObjectStore('copies');
+      request.onerror=()=>done();
+      request.onsuccess=()=>{
+        const db=request.result;
+        const tx=db.transaction('copies','readwrite');
+        const st=tx.objectStore('copies');
+        const get=st.get('before-sync');
+        get.onsuccess=()=>{if(!get.result)st.put({date:new Date().toISOString(),data:raw},'before-sync')};
+        tx.oncomplete=()=>{db.close();done()};
+        tx.onerror=()=>{db.close();done()};
+      };
+    }catch(e){done()}
+  });
+}
+const migrated=migrate();if(migrated){save();mark(true)}
+lastStable=snapshot(S);
 mark(dirty);render();
-function autoPull(){if(Date.now()-lastAutoPull<15000)return;lastAutoPull=Date.now();pull(true)}
-autoPull();addEventListener('focus',autoPull);addEventListener('online',()=>{if(dirty)schedulePush();autoPull()});document.addEventListener('visibilitychange',()=>{if(!document.hidden)autoPull()});setInterval(()=>{if(!document.hidden)autoPull()},120000);
+backupLegacyLocal().then(()=>syncOnce('auto'));
+addEventListener('focus',autoPull);
+addEventListener('online',()=>syncOnce('auto'));
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)autoPull()});
+setInterval(()=>{if(!document.hidden)syncOnce('auto')},SYNC_DELAY);
+
 </script>
 </body>
 </html>
