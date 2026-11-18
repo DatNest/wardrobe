@@ -762,7 +762,7 @@ function canonicalRepo(user,repo){
   return u&&r?{u,r}:null;
 }
 function repoInfo(){return canonicalRepo(G.u,G.r)}
-const api=p=>{const x=repoInfo();return x?`https://api.github.com/repos/${encodeURIComponent(x.u)}/${encodeURIComponent(x.r)}/${p}`:''};
+const api=p=>{const x=repoInfo();if(!x)return '';const root=`https://api.github.com/repos/${encodeURIComponent(x.u)}/${encodeURIComponent(x.r)}`;return p?root+'/'+String(p).replace(/^\/+/, ''):root};
 // Public GitHub Pages repositories can be read without a token. This avoids an
 // unnecessary cross-origin authorization preflight for every public GET.
 const hd=(authenticated=true)=>{const h={Accept:'application/vnd.github+json'};if(authenticated&&G.t)h.Authorization='Bearer '+G.t;return h};
@@ -959,7 +959,7 @@ function protectFirstSync(local,remote){
 function showSyncError(e,manual=false){
   const m=e instanceof Error?e.message:String(e);
   setSyncState('error',m);
-  if(manual||Date.now()-lastSyncError>30*60000){toast('Синхронизация: '+m);lastSyncError=Date.now()}
+  if(manual){toast('Синхронизация: '+m);lastSyncError=Date.now()}
 }
 async function createMissingCatalog(meta){
   const count=DATA_GROUPS.reduce((n,k)=>n+(S[k]?.length||0),0);
