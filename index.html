@@ -73,10 +73,6 @@ dialog .row{flex-wrap:wrap}.ml button{width:100%;margin-top:8px}
 .clr:hover{color:var(--ac)}
 .fa{width:1em;height:1em;flex:none;fill:currentColor;stroke:none}
 .mask{-webkit-text-security:disc;text-security:disc}
-.chips{display:flex;gap:8px;overflow-x:auto;padding:2px 0 4px;margin-top:8px}
-.cc{flex:none;background:var(--card);color:var(--tx);border:1px solid var(--bd);padding:7px 12px;border-radius:20px;font-size:14px}
-.cc.on{background:var(--ac);color:var(--on);border-color:var(--ac)}
-.cc b{width:12px;height:12px;border-radius:50%;border:1px solid rgba(128,128,128,.45);display:inline-block}
 .nv{position:absolute;top:50%;transform:translateY(-50%);background:var(--bg);color:var(--tx);opacity:.85}
 .nv.l{left:10px}.nv.r{right:10px}
 .dp img.sl{animation:sl .22s ease}
@@ -198,7 +194,6 @@ body[data-sty="mag"] .ch span{text-transform:uppercase;letter-spacing:1px;font-s
  </header>
  <div id="bar" hidden>
   <div class="sr"><div class="sw"><svg class="i si"><use href="#i-search"/></svg><input id="q" type="text" name="wd-filter" inputmode="search" enterkeyhint="search" placeholder="Поиск по описанию…" oninput="setQ(this.value)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-bwignore data-form-type="other"><button class="clr" id="qc" onclick="clrQ()" aria-label="Очистить поиск" hidden><svg class="fa"><use href="#fa-circle-xmark"/></svg></button></div><button class="ghost ic" onclick="openSz()" aria-label="Размер карточек"><svg class="i"><use href="#i-grid"/></svg></button></div>
-  <div class="chips" id="chips" hidden></div>
  </div>
  <div id="main"></div>
 </div>
@@ -281,7 +276,7 @@ const ICON=n=>`<svg class="i"><use href="#i-${n}"/></svg>`;
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let selOn=false,sel=new Set(),moveIds=[];
 let lastStable=null;
-let F={q:'',c:new Set()},navL=[],SZ='m',S={chars:[],cats:[],items:[]},V='chars',charId=null,chEdit=null,catId=null,addTo=null,openId=null,G={},dirty=false,lastPush=0,pulling=false,lastAutoPull=0,pushing=false,pushAgain=false,autoPushTimer=null,localRevision=0,lastDirtyNotice=0;
+let F={q:''},navL=[],SZ='m',S={chars:[],cats:[],items:[]},V='chars',charId=null,chEdit=null,catId=null,addTo=null,openId=null,G={},dirty=false,lastPush=0,pulling=false,lastAutoPull=0,pushing=false,pushAgain=false,autoPushTimer=null,localRevision=0,lastDirtyNotice=0;
 try{SZ=localStorage.getItem('wds')||'m'}catch(e){}
 if(!['s','m','l'].includes(SZ))SZ='m';document.body.dataset.sz=SZ;
 try{const s=localStorage.getItem('wd');if(s)S=JSON.parse(s);G=JSON.parse(localStorage.getItem('wdg')||'{}');dirty=localStorage.getItem('wdd')==='1';lastPush=+localStorage.getItem('wdp')||0}catch(e){}
@@ -350,37 +345,14 @@ function go(v,c){
   V=v;if(c)catId=c;render();scrollTo(0,0)
 }
 function enterChar(id){charId=id;selOn=false;sel.clear();clearF();V='shelf';render();scrollTo(0,0)}
-const COL=[
- ['black','Чёрный','#222',/black|noir|чёрн|черн/i],
- ['white','Светлый','#f3ecdf',/ivory|white|cream|beige|ecru|\bbone\b|белы|молочн|слонов|беж/i],
- ['pink','Розовый','#ef7aa8',/pink|\brose\b|fuchsia|magenta|blush|розов|фукси/i],
- ['red','Красный','#c0392b',/\bred\b|crimson|burgundy|\bwine\b|scarlet|красн|бордо/i],
- ['green','Зелёный','#2e7d4f',/green|emerald|olive|\bsage\b|зелен|зелён|изумруд|олив/i],
- ['blue','Синий','#3b6fb5',/blue|navy|teal|cyan|turquoise|син|голуб|бирюз/i],
- ['purple','Фиолетовый','#7e57c2',/purple|violet|lavender|lilac|plum|фиолет|сирен|лаванд/i],
- ['brown','Коричневый','#7b4a2d',/brown|chocolate|\btan\b|camel|coffee|коричн|шоколад/i],
- ['gold','Золото/серебро','#c9a24b',/gold|silver|metallic|золот|серебр/i],
- ['gray','Серый','#8a8a8a',/gr[ae]y|charcoal|серы|сера|серо/i]
-];
-const colSrc=d=>{d=d||'';const m=d.match(/main colou?r:\s*([^.]*)/i);return m?m[1]:d.slice(0,160)};
-const colorsOf=i=>{const t=colSrc(i.desc);return COL.filter(c=>c[3].test(t)).map(c=>c[0])};
-const filterOn=()=>!!(F.q||F.c.size);
+// Ordinary text search is retained; auto-generated colour chips are removed.
+const filterOn=()=>!!F.q;
 function match(i){
-  if(F.q&&!((i.desc||'')+' '+catName(i.cat)).toLowerCase().includes(F.q))return false;
-  if(F.c.size){const cs=colorsOf(i);for(const k of F.c)if(!cs.includes(k))return false}
-  return true;
+  return !F.q||((i.desc||'')+' '+catName(i.cat)).toLowerCase().includes(F.q);
 }
-function clearF(){F={q:'',c:new Set()};$('q').value='';$('qc').hidden=true}
+function clearF(){F={q:''};$('q').value='';$('qc').hidden=true}
 function setQ(v){F.q=v.trim().toLowerCase();$('qc').hidden=!v;render()}
 function clrQ(){F.q='';$('q').value='';$('qc').hidden=true;render()}
-function toggleCol(k){F.c.has(k)?F.c.delete(k):F.c.add(k);render()}
-function resetF(){clearF();render()}
-function chips(){
-  const has=new Set();(V==='chars'?[]:itemsOf(charId)).forEach(i=>colorsOf(i).forEach(k=>has.add(k)));
-  let h=COL.filter(c=>has.has(c[0])).map(c=>`<button class="cc${F.c.has(c[0])?' on':''}" onclick="toggleCol('${c[0]}')"><b style="background:${c[2]}"></b>${c[1]}</button>`).join('');
-  if(h&&filterOn())h+=`<button class="cc" onclick="resetF()"><svg class="fa"><use href="#fa-xmark"/></svg> Сбросить</button>`;
-  $('chips').innerHTML=h;$('chips').hidden=!h;
-}
 
 /* темы */
 const PALS=[['pud','Розовая пудра'],['got','Готика']],STYS=[['cl','Классика'],['mag','Журнал']];
@@ -410,7 +382,6 @@ function render(){
   $('nShelf').hidden=$('nFav').hidden=home||!charId;$('nLooks').classList.toggle('on',V==='looks');
   $('nShelf').classList.toggle('on',V==='shelf'||V==='cat');$('nFav').classList.toggle('on',V==='fav');
   $('bar').hidden=home||V==='looks';
-  chips();
   const m=$('main'),on=filterOn(),none='<div class="empty">Ничего не нашлось.</div>';
   if(home){
     $('title').textContent='Мои персонажи';
@@ -439,6 +410,21 @@ function render(){
      :`<div class="empty" style="margin-top:40px">Пока нет ни одной полки.<button class="ed" onclick="addCat()">${ICON('plus')} Создать полку</button></div>`);
   }
 }
+// Desktop mouse wheel scrolls the horizontal shelf under the pointer.
+// At the left/right edge, vertical page scrolling works normally.
+$('main').addEventListener('wheel',e=>{
+  if(e.ctrlKey||e.metaKey||e.shiftKey||Math.abs(e.deltaX)>1)return;
+  const shelf=e.target.closest('.rw');
+  if(!shelf||!$('main').contains(shelf))return;
+  const max=shelf.scrollWidth-shelf.clientWidth;
+  if(max<=1||Math.abs(e.deltaY)<1)return;
+  const unit=e.deltaMode===1?16:e.deltaMode===2?shelf.clientWidth:1;
+  const next=Math.max(0,Math.min(max,shelf.scrollLeft+e.deltaY*unit));
+  if(Math.abs(next-shelf.scrollLeft)<0.5)return;
+  e.preventDefault();
+  shelf.scrollLeft=next;
+},{passive:false});
+
 /* внешности */
 let lkEdit=null;const lkOpen=new Set();
 const isLibraryLook=l=>/^ness_/.test(String(l&&l.id||''));
