@@ -618,7 +618,7 @@ function toPng(src){return new Promise((ok,no)=>{const im=new Image();im.crossOr
 async function copyImg(){try{const b=await toPng($('vImg').src);await navigator.clipboard.write([new ClipboardItem({'image/png':b})]);toast('Картинка скопирована')}catch(e){toast('Не вышло, зажми картинку и выбери «Копировать»')}}
 async function saveImg(){try{const b=await toPng($('vImg').src);const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='outfit-'+openId+'.png';a.click()}catch(e){toast('Не вышло, зажми картинку и выбери «Сохранить»')}}
 
-/* Wardrobe safe sync v5: network diagnostics, public reads, safe offline fallback. */
+/* Wardrobe sync v7: authenticated reads, GitHub error details, safe local-first merge. */
 const SYNC_DELAY=12*60*1000;
 const DATA_GROUPS=['chars','cats','items','looks'];
 let syncBase=null,syncBusy=false,syncAgain=false,syncDebounce=null,lastSyncStart=0,lastSyncError=0,syncFailCount=0;
@@ -763,8 +763,9 @@ function canonicalRepo(user,repo){
 }
 function repoInfo(){return canonicalRepo(G.u,G.r)}
 const api=p=>{const x=repoInfo();if(!x)return '';const root=`https://api.github.com/repos/${encodeURIComponent(x.u)}/${encodeURIComponent(x.r)}`;return p?root+'/'+String(p).replace(/^\/+/, ''):root};
-// Public GitHub Pages repositories can be read without a token. This avoids an
-// unnecessary cross-origin authorization preflight for every public GET.
+// Read using the configured token as well as writing: public anonymous reads
+// are limited by GitHub to 60 calls/hour per shared public IP and can produce 403.
+// When no token is configured the same helper still supports public read-only mode.
 const hd=(authenticated=true)=>{const h={Accept:'application/vnd.github+json'};if(authenticated&&G.t)h.Authorization='Bearer '+G.t;return h};
 function githubNetworkError(e,operation,timeout){
   const isTimeout=!!timeout||e?.name==='AbortError';
@@ -787,48 +788,55 @@ async function githubPublicProbe(){
 
 const b64=s=>btoa(unescape(encodeURIComponent(s)));
 async function errorText(r){try{const j=await r.json();return String(j.message||'')}catch(e){return ''}}
-function requestError(status,extra=''){
-  if(status===401)return new Error('Токен GitHub недействителен или истёк. Проверь токен в настройках.');
-  if(status===403)return new Error('GitHub запретил доступ (403). Проверь права токена: Contents → Read and write.');
-  if(status===404)return new Error('404: репозиторий или файл не доступен этому токену. Проверь логин, имя репозитория и доступ токена.');
-  return new Error('GitHub '+status+(extra?' · '+extra:''));
+async function requestError(response,operation='Запрос GitHub'){
+  const status=response.status;
+  // GitHub messages are safe to show, unlike Authorization; cap for readability.
+  const detail=(await errorText(response)).slice(0,320);
+  const remaining=response.headers.get('x-ratelimit-remaining');
+  const retryAfter=response.headers.get('retry-after');
+  const limitHit=remaining==='0'||/rate limit|secondary rate|abuse detection/i.test(detail);
+  const where=operation+': ';
+  let msg;
+  if(status===401)msg='GitHub отклонил токен (401). Проверь сохранённый токен.';
+  else if(status===403&&limitHit)msg='GitHub временно ограничил частоту запросов (403). Это не обязательно ошибка прав токена.';
+  else if(status===403)msg='GitHub запретил запрос (403). Возможны права, правила ветки или ограничения аккаунта.';
+  else if(status===404)msg='GitHub не нашёл файл или не разрешил к нему доступ (404).';
+  else msg='GitHub вернул HTTP '+status+'.';
+  if(detail)msg+=' Ответ GitHub: '+detail;
+  if(remaining!==null)msg+=' Осталось запросов: '+remaining+'.';
+  if(retryAfter)msg+=' Повторить не ранее чем через '+retryAfter+' сек.';
+  const e=new Error(where+msg);e.status=status;e.rateLimited=!!limitHit;e.retryAfter=retryAfter?Number(retryAfter):0;
+  return e;
 }
 async function loadRepoMeta(force=false){
   const info=repoInfo();if(!info)throw new Error('Укажи логин и репозиторий GitHub в настройках.');
   const key=info.u.toLowerCase()+'/'+info.r.toLowerCase()+'/'+(G.t||'');
   if(!force&&repoCache&&repoCache.key===key&&Date.now()-repoCache.at<20*60000)return repoCache.value;
-  // Try public metadata first: most wardrobe sites are public GitHub Pages.
-  let r;
-  try{r=await githubFetch(api(''),{headers:hd(false),cache:'no-store'},'Чтение репозитория')}
-  catch(e){if(!G.t)throw e;r=await githubFetch(api(''),{headers:hd(true),cache:'no-store'},'Чтение репозитория с токеном')}
-  if((r.status===404||r.status===403)&&G.t){
-    r=await githubFetch(api(''),{headers:hd(true),cache:'no-store'},'Чтение репозитория с токеном');
-  }
-  if(!r.ok){
-    if(r.status===404)throw new Error('404: GitHub не видит '+info.u+'/'+info.r+'. Проверь имя и доступ токена именно к этому репозиторию.');
-    throw requestError(r.status,await errorText(r));
-  }
+  // Use the configured token on the FIRST request, even for public repos.
+  // A public request can fail with 403 on GitHub's anonymous IP rate limit.
+  const r=await githubFetch(api(''),{headers:hd(true),cache:'no-store'},'Чтение репозитория');
+  if(!r.ok)throw await requestError(r,'Чтение репозитория '+info.u+'/'+info.r);
   const j=await r.json();
   const value={branch:j.default_branch||'main',full_name:j.full_name||info.u+'/'+info.r,permissions:j.permissions||{},isPrivate:!!j.private,pageSource:null};
   try{
-    const pages=await githubFetch(api('pages'),{headers:hd(value.isPrivate),cache:'no-store'},'Проверка настроек GitHub Pages',9000);
+    const pages=await githubFetch(api('pages'),{headers:hd(true),cache:'no-store'},'Проверка настроек GitHub Pages',9000);
     if(pages.ok){const page=await pages.json();if(page.source?.branch)value.pageSource={branch:page.source.branch,dir:page.source.path==='/docs'?'docs/':''}}
   }catch(e){/* Pages metadata is optional; do not fail catalog loading */}
   repoCache={key,at:Date.now(),value};return value;
 }
 function repoPath(path,branch){return api('contents/'+path.split('/').map(encodeURIComponent).join('/')+(branch?'?ref='+encodeURIComponent(branch):''))}
 async function readGitFile(path,branch){
-  const response=await githubFetch(repoPath(path,branch),{headers:hd(repoCache?.value?.isPrivate),cache:'no-store'},'Чтение '+path);
+  const response=await githubFetch(repoPath(path,branch),{headers:hd(true),cache:'no-store'},'Чтение '+path);
   if(response.status===404)return null;
-  if(!response.ok)throw requestError(response.status,await errorText(response));
+  if(!response.ok)throw await requestError(response,'Чтение '+branch+'/'+path);
   const j=await response.json();
   if(j.type!=='file')throw new Error('GitHub вернул не файл каталога: '+path);
   let jsonText='';
   if(j.content)jsonText=decodeURIComponent(escape(atob(j.content.replace(/\s/g,''))));
   else if(j.encoding==='none'){
     // Contents API omits embedded content for JSON files over 1 MB.
-    const big=await githubFetch(repoPath(path,branch),{headers:{...hd(repoCache?.value?.isPrivate),Accept:'application/vnd.github.raw+json'},cache:'no-store'},'Загрузка большого '+path,30000);
-    if(!big.ok)throw requestError(big.status,await errorText(big));
+    const big=await githubFetch(repoPath(path,branch),{headers:{...hd(true),Accept:'application/vnd.github.raw+json'},cache:'no-store'},'Загрузка большого '+path,30000);
+    if(!big.ok)throw await requestError(big,'Загрузка большого '+branch+'/'+path);
     jsonText=await big.text();
   }else throw new Error('GitHub не вернул текст файла: '+path);
   let data;try{data=JSON.parse(jsonText)}
@@ -861,9 +869,7 @@ async function putAt(path,content64,msg,sha,branch){
     const e=new Error('Изменения в GitHub появились одновременно. Повторяю объединение.');e.conflict=true;throw e;
   }
   if(!r.ok){
-    const extra=await errorText(r);
-    if(r.status===404)throw new Error('404 при записи в '+repoInfo().u+'/'+repoInfo().r+'/'+path+'. Токен не имеет доступа на запись в ветку '+branch+' или репозиторий указан неверно. Проверь Contents → Read and write.');
-    throw requestError(r.status,extra);
+    throw await requestError(r,'Запись '+branch+'/'+path);
   }
   return await r.json();
 }
@@ -875,8 +881,8 @@ async function uploadImages(data,branch,catalogPath){
       if(/^data:image\/jpeg;base64,/i.test(raw)){
         const rel='images/'+rec.id+(rec.v?'_'+rec.v:'')+'.jpg';
         const path=(catalogPath.includes('/')?catalogPath.slice(0,catalogPath.lastIndexOf('/')+1):'')+rel;
-        const exists=await githubFetch(repoPath(path,branch),{headers:hd(repoCache?.value?.isPrivate),cache:'no-store'},'Проверка фотографии '+path);
-        if(exists.status!==404&&!exists.ok)throw requestError(exists.status,await errorText(exists));
+        const exists=await githubFetch(repoPath(path,branch),{headers:hd(true),cache:'no-store'},'Проверка фотографии '+path);
+        if(exists.status!==404&&!exists.ok)throw await requestError(exists,'Проверка фотографии '+branch+'/'+path);
         const sha=exists.ok?(await exists.json()).sha:null;
         await putAt(path,raw.split(',')[1],'Upload photo '+rec.id,sha,branch);
         rec.img=rel;delete rec.v;
@@ -1111,7 +1117,7 @@ async function testGithub(){
   try{
     const meta=await loadRepoMeta(true);
     const remote=await readRemote();
-    status.textContent='✓ GitHub доступен: '+meta.full_name+'\nФайл: '+remote.branch+'/'+remote.path+'\n'+catalogSummary(remote.data)+'\n'+(G.t?'Токен указан. Для записи требуется Contents → Read and write.':'Токен не указан — только чтение.');
+    status.textContent='✓ GitHub доступен: '+meta.full_name+'\nФайл: '+remote.branch+'/'+remote.path+'\n'+catalogSummary(remote.data)+'\n'+(G.t?'Чтение через указанный токен: успешно. Запись будет подтверждена только при отправке изменений.':'Токен не указан — только чтение.');
   }catch(e){
     let detail='';
     if(e.network){
