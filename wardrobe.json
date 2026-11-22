@@ -84,6 +84,11 @@
    "id": "c1794999634245",
    "name": "АтлА",
    "char": "ch1794999556865"
+  },
+  {
+   "id": "c1795340418782",
+   "name": "Fantasy",
+   "char": "ch1795340142714"
   }
  ],
  "items": [
@@ -387,6 +392,12 @@
    "cat": "c1794787403132",
    "desc": "bohemian nomad outfit, Tibetan-inspired fashion, earthy color palette, terracotta orange cropped wrap top, v-neck, exposed midriff, oversized rust orange open-front robe, wide elbow-length sleeves, golden embroidered sleeve cuffs, patterned trim, loose cream harem pants, high waist, extremely baggy pants, gathered ankles, rust red fabric waist sash, long hanging fabric panels, embroidered spiral motif, decorative tassels, amber beads, layered necklaces, turquoise pendant, dangling turquoise earrings, stacked brown fabric wrist wraps, cream ankle wraps, thick soles, handmade accessories",
    "img": "images/i1795056582342.jpg"
+  },
+  {
+   "id": "i1795340446026",
+   "cat": "c1795340418782",
+   "desc": "gold upper arm bands, one pierced nipple, \nwide purple waist sash,\nloose dark plum harem pants,\nsmall gold waist ornaments",
+   "img": "images/i1795340446026.jpg"
   }
  ],
  "looks": [
